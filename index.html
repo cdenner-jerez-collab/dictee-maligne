@@ -237,6 +237,24 @@ cha-peau  (pour indiquer vous-même le découpage en syllabes)"></textarea>
 
       <div class="check-row"><input type="checkbox" id="splitWords"><div><div class="t">Découper chaque ligne en mots/syllabes séparés</div><div class="d">« so sa si os » devient 4 syllabes travaillées une par une — sinon la ligne entière est traitée comme une phrase. Une ligne contenant des astérisques reste toujours une phrase (ex. Le *chat* dort.).</div></div></div>
 
+      <div id="row-verbes" style="margin-top:12px;">
+        <label for="verbes">Verbes à l'infinitif (un par ligne) — l'application crée des phrases de conjugaison, à partir du CE2</label>
+        <textarea id="verbes" placeholder="chanter
+finir
+être
+aller
+dormir"></textarea>
+        <div class="help">Chaque verbe est conjugué au temps choisi et inséré dans une phrase d'entraînement, avec un mot de la liste quand il y en a. Les verbes irréguliers courants sont reconnus — vérifiez l'aperçu ci-dessous.</div>
+        <label for="tensConj">Temps de conjugaison travaillé</label>
+        <select id="tensConj">
+          <option value="present">Présent</option>
+          <option value="futur">Futur</option>
+          <option value="imparfait">Imparfait</option>
+          <option value="passe">Passé composé</option>
+        </select>
+        <div class="status" id="conjPreview"></div>
+      </div>
+
       <div class="row" style="margin-top:10px;">
         <input type="file" id="photoInput" accept="image/*" capture="environment">
         <button class="btn-ghost btn-sm" id="scanBtn" type="button">📷 Lire une photo de la liste</button>
@@ -274,6 +292,7 @@ cha-peau  (pour indiquer vous-même le découpage en syllabes)"></textarea>
       <div class="check-row"><input type="checkbox" id="ex-chasse" checked><div><div class="t">Chasse à l'erreur</div><div class="d">écoute le mot et repère la seule orthographe correcte parmi des erreurs plausibles (lettres inversées, lettres oubliées, é/è confondus…)</div></div></div>
       <div class="check-row"><input type="checkbox" id="ex-mystere" checked><div><div class="t">Mot mystère</div><div class="d">indices progressifs (nombre de lettres, première syllabe…) à découvrir avant d'écrire le mot</div></div></div>
       <div class="check-row"><input type="checkbox" id="ex-famille"><div><div class="t">Mots de la même famille</div><div class="d">nécessite une ligne « mot &gt; dérivé1, dérivé2 » dans la liste</div></div></div>
+      <div class="check-row"><input type="checkbox" id="adaptive" checked><div><div class="t">Révision intelligente 🧠</div><div class="d">les mots et syllabes déjà bien maîtrisés ne sont plus proposés à l'élève ; ceux qu'il rate reviennent plus souvent — basé sur l'historique de l'élève sélectionné</div></div></div>
     </div>
 
     <div class="row">
@@ -642,8 +661,10 @@ function applyNiveauDefaults(){
   document.getElementById('row-graphie').style.display = niveauSel.value==='CP' ? 'flex':'none';
   document.getElementById('row-phrase').style.display = (niveauSel.value==='CP'||niveauSel.value==='CE1') ? 'none':'flex';
   document.getElementById('splitWords').checked = false;
+  document.getElementById('row-verbes').style.display = (niveauSel.value==='CP'||niveauSel.value==='CE1') ? 'none' : 'block';
+  document.getElementById('tensConj').value = niveauSel.value==='CE2' ? 'present' : niveauSel.value==='CM1' ? 'futur' : 'imparfait';
 }
-niveauSel.addEventListener('change', ()=>{ applyNiveauDefaults(); store.niveau=niveauSel.value; saveStore(); });
+niveauSel.addEventListener('change', ()=>{ applyNiveauDefaults(); store.niveau=niveauSel.value; store.tensConj=document.getElementById('tensConj').value; saveStore(); updateConjPreview(); });
 sessLenSel.addEventListener('change', ()=>{ store.sessLen=sessLenSel.value; saveStore(); });
 
 /* ---------- Génération des exercices ---------- */
@@ -701,8 +722,9 @@ function genPhraseExo(item){
   return {type:'phrase', item, target, blanked, options};
 }
 function genChasseExo(item){
-  const target = item.kind==='word' ? item.text : item.target;
+  let target = item.kind==='word' ? item.text : item.target;
   if(!target) return null;
+  if(target.includes(' ')) target = target.split(' ').pop();
   let pool = new Set(orthoVariants(target));
   let tries=0;
   while(pool.size<3 && tries<12){ const d=confusableSwap(target); if(d.toLowerCase()!==target.toLowerCase() && !pool.has(d)) pool.add(d); tries++; }
@@ -715,8 +737,9 @@ function genChasseExo(item){
   return {type:'chasse', item, target, options};
 }
 function genMystereExo(item){
-  const word = item.kind==='word' ? item.text : item.target;
+  let word = item.kind==='word' ? item.text : item.target;
   if(!word) return null;
+  if(word.includes(' ')) word = word.split(' ').pop();
   const syl = item.kind==='word' ? item.syllables : syllabify(word);
   const hints = [`Ce mot a ${word.length} lettres.`, `Il commence par « ${word[0].toUpperCase()} ».`];
   if(syl.length>1) hints.push(`Sa première syllabe est « ${syl[0]} ».`);
@@ -774,6 +797,150 @@ function buildQueue(items, families, opts){
   return interleaved;
 }
 
+/* ---------- Conjugaison automatique (CE2 et +) ---------- */
+const PERS=['je','tu','il','nous','vous','ils'];
+const TENSES={present:'présent', futur:'futur', imparfait:'imparfait', passe:'passé composé'};
+const ETRE_AUX=new Set(['aller','arriver','descendre','devenir','entrer','monter','mourir','naitre','partir','passer','rester','retourner','revenir','sortir','tomber','venir','naitre']);
+const IRREG={
+'etre':{p:['suis','es','est','sommes','êtes','sont'],f:'ser',pp:'été'},
+'avoir':{p:['ai','as','a','avons','avez','ont'],f:'aur',pp:'eu'},
+'aller':{p:['vais','vas','va','allons','allez','vont'],f:'ir',pp:'allé',aux:1},
+'faire':{p:['fais','fais','fait','faisons','faites','font'],f:'fer',pp:'fait'},
+'dire':{p:['dis','dis','dit','disons','dites','disent'],f:'dir',pp:'dit'},
+'voir':{p:['vois','vois','voit','voyons','voyez','voient'],f:'verr',pp:'vu'},
+'savoir':{p:['sais','sais','sait','savons','savez','savent'],f:'saur',pp:'su'},
+'pouvoir':{p:['peux','peux','peut','pouvons','pouvez','peuvent'],f:'pourr',pp:'pu'},
+'vouloir':{p:['veux','veux','veut','voulons','voulez','veulent'],f:'voudr',pp:'voulu'},
+'venir':{p:['viens','viens','vient','venons','venez','viennent'],f:'viendr',pp:'venu',aux:1},
+'tenir':{p:['tiens','tiens','tient','tenons','tenez','tiennent'],f:'tiendr',pp:'tenu'},
+'prendre':{p:['prends','prends','prend','prenons','prenez','prennent'],f:'prendr',pp:'pris'},
+'mettre':{p:['mets','mets','met','mettons','mettez','mettent'],f:'mettr',pp:'mis'},
+'ouvrir':{p:['ouvre','ouvres','ouvre','ouvrons','ouvrez','ouvrent'],f:'ouvrir',pp:'ouvert'},
+'dormir':{p:['dors','dors','dort','dormons','dormez','dorment'],f:'dormir',pp:'dormi'},
+'partir':{p:['pars','pars','part','partons','partez','partent'],f:'partir',pp:'parti',aux:1},
+'sortir':{p:['sors','sors','sort','sortons','sortez','sortent'],f:'sortir',pp:'sorti',aux:1},
+'boire':{p:['bois','bois','boit','buvons','buvez','boivent'],f:'boir',pp:'bu'},
+'ecrire':{p:['écris','écris','écrit','écrivons','écrivez','écrivent'],f:'écrir',pp:'écrit'},
+'lire':{p:['lis','lis','lit','lisons','lisez','lisent'],f:'lir',pp:'lu'},
+'connaitre':{p:['connais','connais','connaît','connaissons','connaissez','connaissent'],f:'connaîtr',pp:'connu'},
+'devoir':{p:['dois','dois','doit','devons','devez','doivent'],f:'devr',pp:'dû'},
+'recevoir':{p:['reçois','reçois','reçoit','recevons','recevez','reçoivent'],f:'recevr',pp:'reçu'},
+'vivre':{p:['vis','vis','vit','vivons','vivez','vivent'],f:'viv',pp:'vécu'},
+'suivre':{p:['suis','suis','suit','suivons','suivez','suivent'],f:'suivr',pp:'suivi'},
+'courir':{p:['cours','cours','court','courons','courez','courent'],f:'courr',pp:'couru'},
+'rire':{p:['ris','ris','rit','rions','riez','rient'],f:'rir',pp:'ri'},
+'envoyer':{p:['envoie','envoies','envoie','envoyons','envoyez','envoient'],f:'enverr',pp:'envoyé'},
+'appeler':{p:['appelle','appelles','appelle','appelons','appelez','appellent'],f:'appeller',pp:'appelé'},
+'jeter':{p:['jette','jettes','jette','jetons','jetez','jettent'],f:'jetter',pp:'jeté'},
+'naitre':{p:['nais','nais','naît','naissons','naissez','naissent'],f:'naitr',pp:'né',aux:1}
+};
+const CONJ_ACC={'être':'etre','écrire':'ecrire','connaître':'connaitre','naître':'naitre'};
+function conjKey(inf){ return CONJ_ACC[inf.toLowerCase()] || inf.toLowerCase(); }
+const E1=['e','es','e','ons','ez','ent'];
+const E2=['is','is','it','issons','issez','issent'];
+const EF=['ai','as','a','ons','ez','ont'];
+const EI=['ais','ais','ait','ions','iez','aient'];
+const MASC_EN_E=new Set(['livre','arbre','père','frère','chêne','lièvre','maître','cube','terme','cône','renne','mètre','goûter','anniversaire','populaire','silence','nuage','voyage','message','jardin','dessin','romarin']);
+function presForms(key, inf){
+  const ir=IRREG[key];
+  if(ir) return ir.p;
+  if(key.endsWith('er')){ const st=inf.slice(0,-2); const f=E1.map(e=>st+e); if(key.endsWith('ger')) f[3]=st+'eons'; else if(key.endsWith('cer')) f[3]=st.slice(0,-1)+'çons'; return f; }
+  if(key.endsWith('ir')) return E2.map(e=>inf.slice(0,-2)+e);
+  if(key.endsWith('re')) return ['s','s','','ons','ez','ent'].map(e=>inf.slice(0,-2)+e);
+  return null;
+}
+function conjAt(inf, tense, i){
+  const key=conjKey(inf); const ir=IRREG[key];
+  if(tense==='present'){ const p=presForms(key, inf); return p? p[i] : null; }
+  if(tense==='futur'){ let st=null; if(ir) st=ir.f; else if(key.endsWith('er')||key.endsWith('ir')) st=inf; else if(key.endsWith('re')) st=inf.slice(0,-1)+'r'; return st? st+EF[i] : null; }
+  if(tense==='imparfait'){ if(key==='etre') return 'ét'+EI[i]; const p=presForms(key, inf); return p? p[3].replace(/ons$/,'')+EI[i] : null; }
+  if(tense==='passe'){
+    let pp = ir? ir.pp : key.endsWith('er')? inf.slice(0,-2)+'é' : key.endsWith('ir')? inf.slice(0,-2)+'i' : key.endsWith('re')? inf.slice(0,-2)+'u' : null;
+    if(!pp) return null;
+    const auxEtre = (ir&&ir.aux) || ETRE_AUX.has(key);
+    return auxEtre? ETRE_PRES[i]+' '+pp : AUX_PRES[i]+' '+pp;
+  }
+  return null;
+}
+const AUX_PRES=['ai','as','a','avons','avez','ont'];
+const ETRE_PRES=['suis','es','est','sommes','êtes','sont'];
+const CONJ_PREFS={
+  present:["Aujourd'hui, ","Tous les jours, ","En classe, "],
+  futur:["Demain, ","La semaine prochaine, ","Ce soir, "],
+  imparfait:["Autrefois, ","Avant, ","Dimanche dernier, "],
+  passe:["Hier, ","Ce matin, ","Pendant les vacances, "]
+};
+function detWord(w){
+  const fem = /e$/.test(w) && !MASC_EN_E.has(w.toLowerCase());
+  return /^[aeiouéèêàîôh]/i.test(w)? "l'"+w : (fem?'la ':'le ')+w;
+}
+function conjSentence(inf, tense, pers, word){
+  const base=conjAt(inf, tense, pers);
+  if(!base) return null;
+  const key=conjKey(inf); const ir=IRREG[key];
+  let pron=PERS[pers], verb=base;
+  if(tense==='passe' && (pers===2||pers===5) && ((ir&&ir.aux)||ETRE_AUX.has(key))){
+    if(Math.random()<0.3){ pron = pers===2?'elle':'elles'; const pp=base.split(' ')[1]; verb = base.split(' ')[0]+' '+pp+(pron==='elle'?'e':'es'); }
+  }
+  if(pron==='je' && /^[aeiouéèêàîôh]/i.test(verb)) pron="j'";
+  const prefs=CONJ_PREFS[tense]; const pref=prefs[Math.floor(Math.random()*prefs.length)];
+  const comp = word? ' avec '+detWord(word) : '';
+  return {text: pref+pron+(pron==="j'"?'':' ')+verb+comp+'.', target: verb};
+}
+function getVerbes(){
+  return document.getElementById('verbes').value.split(/\n|,/).map(s=>s.trim()).filter(Boolean);
+}
+function conjItemsFor(items){
+  const verbes=getVerbes();
+  if(!verbes.length) return {items:[], errs:[]};
+  const tense=document.getElementById('tensConj').value;
+  const words=items.filter(it=>it.kind==='word' && it.text.length>2).map(it=>it.text);
+  const out=[], errs=[];
+  verbes.forEach(inf=>{
+    const pers=Math.floor(Math.random()*6);
+    const w = words.length? words[Math.floor(Math.random()*words.length)] : null;
+    const s=conjSentence(inf, tense, pers, w);
+    if(s) out.push({kind:'phrase', text:s.text, target:s.target}); else errs.push(inf);
+  });
+  return {items:out, errs};
+}
+function updateConjPreview(){
+  const zone=document.getElementById('conjPreview');
+  const verbes=getVerbes();
+  if(!verbes.length || niveauSel.value==='CP' || niveauSel.value==='CE1'){ zone.textContent=''; return; }
+  const words=parseInput(document.getElementById('liste').value, false).items.filter(it=>it.kind==='word' && it.text.length>2).map(it=>it.text);
+  const tense=document.getElementById('tensConj').value;
+  const gens=verbes.slice(0,6).map(inf=>{ const s=conjSentence(inf, tense, 2, words[0]||null); return s? s.text : '✗ '+inf+' (non reconnu)'; });
+  zone.textContent='Aperçu ('+TENSES[tense]+') : '+gens.join('  ·  ');
+}
+
+/* ---------- Révision intelligente : maîtrise par élève ---------- */
+function exoKey(ex){ return String(ex.target || ex.item.text).toLowerCase(); }
+function masteryOf(){
+  if(!storageOK || !store.currentEleve) return null;
+  const e = store.eleves[store.currentEleve];
+  return (e && e.mastery) ? e.mastery : null;
+}
+function bumpMastery(ex, ok){
+  if(!storageOK || !store.currentEleve) return;
+  const e = store.eleves[store.currentEleve] = store.eleves[store.currentEleve] || {history:[]};
+  e.mastery = e.mastery || {};
+  const k = exoKey(ex);
+  const s = e.mastery[k] = e.mastery[k] || {ok:0, ko:0};
+  if(ok) s.ok++; else s.ko++;
+}
+function isMastered(k, m){ const s=m[k]; return !!(s && s.ok - s.ko >= 3); }
+function isWeak(k, m){ const s=m[k]; return !!(s && s.ko > s.ok); }
+function adaptQueue(q){
+  const m = masteryOf();
+  if(!m) return q;
+  const kept = q.filter(e=>!isMastered(exoKey(e), m));
+  if(kept.length===0) return null;  // tout est maîtrisé
+  const boosted=[];
+  kept.forEach(e=>{ boosted.push(e); if(isWeak(exoKey(e), m) && Math.random()<0.75) boosted.push(e); });
+  return interleave(boosted);
+}
+
 /* ---------- Moteur de séance ---------- */
 let queue=[], qi=0, score=0, missedItems=[], streak=0, flashTimer=null, flashInterval=null, sessionWords=[];
 const scrSetup=document.getElementById('screen-setup'), scrExo=document.getElementById('screen-exercise'), scrRes=document.getElementById('screen-results'), scrSuivi=document.getElementById('screen-suivi');
@@ -782,6 +949,11 @@ const exoZone=document.getElementById('exoZone'), nextBtn=document.getElementByI
 document.getElementById('startBtn').addEventListener('click', ()=>{
   const raw = document.getElementById('liste').value;
   const {items, families} = parseInput(raw, document.getElementById('splitWords').checked);
+  if(niveauSel.value!=='CP' && niveauSel.value!=='CE1'){
+    const conj = conjItemsFor(items);
+    conj.items.forEach(p=>items.push(p));
+    document.getElementById('setupStatus').textContent = conj.errs.length ? "Verbes non reconnus (laissés de côté) : "+conj.errs.join(', ') : '';
+  }
   if(items.length===0 && families.length===0){ document.getElementById('setupStatus').textContent="Ajoutez au moins un mot ou une phrase."; return; }
   const opts = {
     niveau: niveauSel.value,
@@ -797,6 +969,13 @@ document.getElementById('startBtn').addEventListener('click', ()=>{
   };
   queue = buildQueue(items, families, opts);
   if(queue.length===0){ document.getElementById('setupStatus').textContent="Aucun exercice possible avec ces réglages — cochez au moins un type adapté à votre liste."; return; }
+  if(document.getElementById('adaptive').checked){
+    const before = queue.length;
+    const adapted = adaptQueue(queue);
+    if(adapted===null){ document.getElementById('setupStatus').textContent="Bravo "+store.currentEleve+" ! Tous les mots de cette liste sont maîtrisés. Change de liste, ou décoche « Révision intelligente » pour réviser quand même."; return; }
+    if(adapted.length<before){ document.getElementById('setupStatus').textContent=(before-adapted.length)+" exercice(s) écarté(s) : mots déjà maîtrisés par "+store.currentEleve+" 🎉"; }
+    queue = adapted;
+  }
   sessionWords = [...new Set(queue.map(e=>e.item.text))];
   qi=0; score=0; missedItems=[]; streak=0;
   scrSetup.style.display='none'; scrSuivi.style.display='none'; scrExo.style.display='block'; scrRes.style.display='none';
@@ -843,7 +1022,12 @@ function showSuivi(){
     el.history.forEach(h=>h.missed.forEach(w=>counts[w]=(counts[w]||0)+1));
     const worst=Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,8);
     const statsHtml = worst.length? '<label>Mots les plus souvent ratés</label><div class="tiles">'+worst.map(([w,c])=>`<span class="tile">${esc(w)} ×${c}</span>`).join('')+'</div>' : '';
-    detail = `<label style="margin-top:18px;">Détail — ${esc(name)}</label>${rows}${statsHtml}`;
+    const mas = el.mastery||{};
+    const masteredK = Object.keys(mas).filter(k=>mas[k].ok-mas[k].ko>=3);
+    const weakK = Object.keys(mas).filter(k=>mas[k].ko>mas[k].ok);
+    const masHtml = (masteredK.length? '<label>Mots maîtrisés (plus proposés 🧠)</label><div class="tiles">'+masteredK.slice(0,12).map(k=>`<span class="tile">${esc(k)}</span>`).join('')+'</div>' : '') +
+      (weakK.length? '<label>En difficulté (proposés plus souvent)</label><div class="tiles">'+weakK.slice(0,12).map(k=>`<span class="tile">${esc(k)}</span>`).join('')+'</div>' : '');
+    detail = `<label style="margin-top:18px;">Détail — ${esc(name)}</label>${rows}${statsHtml}${masHtml}`;
   }
   zone.innerHTML = `<label style="margin-top:0;">Vue classe</label>${classRows}${detail}`;
 }
@@ -879,6 +1063,7 @@ function showExercise(){
 }
 function finishExercise(correct, ex){
   if(correct){ score++; streak++; } else { streak=0; missedItems.push(ex); }
+  bumpMastery(ex, correct);
   nextBtn.classList.remove('hidden');
   updateProgress();
 }
@@ -1202,6 +1387,9 @@ function restore(){
   if(store.opts){ for(const k in store.opts){ const el=document.getElementById('ex-'+k); if(el) el.checked = store.opts[k]; } }
   if(typeof store.tolAccents === 'boolean'){ document.getElementById('tolAccents').checked = store.tolAccents; }
   if(typeof store.splitWords === 'boolean'){ document.getElementById('splitWords').checked = store.splitWords; }
+  if(typeof store.adaptive === 'boolean'){ document.getElementById('adaptive').checked = store.adaptive; }
+  if(store.verbes){ document.getElementById('verbes').value = store.verbes; }
+  if(store.tensConj){ document.getElementById('tensConj').value = store.tensConj; }
   const rateSel=document.getElementById('rateSel');
   rateSel.value = store.rate;
   rateLabel();
@@ -1209,13 +1397,17 @@ function restore(){
 function rateLabel(){ document.getElementById('rateLabel').textContent = 'Vitesse : '+Number(document.getElementById('rateSel').value).toFixed(2).replace('.',',')+(Number(rateSel.value)<=0.7?' 🐢 (très lent)':Number(rateSel.value)>=1.1?' 🐇 (rapide)':''); }
 (function init(){
   const ta=document.getElementById('liste');
-  ta.addEventListener('input', ()=>{ store.liste=ta.value; saveStore(); updateSylWarning(); });
+  ta.addEventListener('input', ()=>{ store.liste=ta.value; saveStore(); updateSylWarning(); updateConjPreview(); });
   ['syllabe','encodage','graphie','lettres','flash','phrase','chasse','mystere','famille'].forEach(k=>{
     const el=document.getElementById('ex-'+k);
     el.addEventListener('change', ()=>{ store.opts = store.opts||{}; store.opts[k]=el.checked; saveStore(); });
   });
   document.getElementById('tolAccents').addEventListener('change', e=>{ store.tolAccents=e.target.checked; saveStore(); });
   document.getElementById('splitWords').addEventListener('change', e=>{ store.splitWords=e.target.checked; saveStore(); updateSylWarning(); });
+  document.getElementById('adaptive').addEventListener('change', e=>{ store.adaptive=e.target.checked; saveStore(); });
+  const verbesTa=document.getElementById('verbes');
+  verbesTa.addEventListener('input', ()=>{ store.verbes=verbesTa.value; saveStore(); updateConjPreview(); });
+  document.getElementById('tensConj').addEventListener('change', e=>{ store.tensConj=e.target.value; saveStore(); updateConjPreview(); });
   const rateSel=document.getElementById('rateSel');
   rateSel.addEventListener('input', ()=>{ store.rate=Number(rateSel.value); saveStore(); rateLabel(); });
   document.getElementById('voiceSel').addEventListener('change', e=>{ store.voiceName=e.target.value; saveStore(); speak('Bonjour ! Je lis les mots de la dictée.'); });
