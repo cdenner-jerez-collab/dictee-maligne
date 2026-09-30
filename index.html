@@ -424,13 +424,48 @@ function refreshVoices(){
 }
 try{ speechSynthesis.onvoiceschanged = refreshVoices; }catch(e){}
 
+function orthoVariants(w){
+  const low=w.toLowerCase();
+  const phon=[['an','en'],['en','an'],['ain','in'],['in','ain'],['ein','ain'],['aim','in'],
+              ['ai','è'],['è','ai'],['ai','a'],['ei','ai'],['eau','o'],['eau','au'],['au','o'],
+              ['ph','f'],['ch','c'],['gu','g'],['g','j'],['j','g'],['y','i'],
+              ['ss','s'],['s','ss'],['tt','t'],['ll','l'],['l','ll'],['er','é'],['é','er'],['ez','é'],['on','om']];
+  const phonOut=[];
+  phon.forEach(([a,b])=>{ if(low.includes(a)){ const v=low.replace(a,b); if(v!==low) phonOut.push(v); } });
+  // confusions visuelles classiques
+  const vis=[['b','d'],['d','b'],['p','q'],['q','p'],['m','n'],['n','m'],['f','v'],['t','d']];
+  const visOut=[];
+  vis.forEach(([a,b])=>{ if(low.includes(a)) visOut.push(low.replace(a,b)); });
+  ['é','è','ê'].forEach(a=>{ if(low.includes(a)){ visOut.push(low.replace(new RegExp(a,'g'),'e')); visOut.push(low.replace(new RegExp(a,'g'),'è')); } });
+  // doublement d'une consonne INTERNE (erreur réaliste : chappeau)
+  const doubles=[];
+  for(let i=1;i<low.length-1;i++){
+    if(/[bcdfglmnprst]/.test(low[i]) && !/[bcdfglmnprst]/.test(low[i-1])){ doubles.push(low.slice(0,i)+low[i]+low.slice(i)); break; }
+  }
+  // lettre oubliée (mot d'au moins 4 lettres, pas la première)
+  const omissions=[];
+  if(low.length>=4){
+    for(let i=1;i<low.length;i++){
+      if(low[i]===low[i-1]) continue;
+      const v=low.slice(0,i)+low.slice(i+1);
+      if(v!==low && v.length>1) omissions.push(v);
+    }
+  }
+  // inversions : dépannage uniquement, 2 maximum
+  const inversions=[];
+  for(let i=1;i<low.length-1 && inversions.length<2;i++){
+    if(low[i]!==low[i+1]) inversions.push(low.slice(0,i)+low[i+1]+low[i]+low.slice(i+2));
+  }
+  return [...new Set([...phonOut, ...visOut, ...doubles, ...omissions, ...inversions])].filter(v=>v && v!==low && v.length>1);
+}
 function confusableSwap(syl){
   const low = syl.toLowerCase();
   const candidates = CONFUSABLE.filter(([a])=>low.includes(a));
   if(candidates.length===0){
-    const idx = Math.floor(Math.random()*syl.length);
-    const alt = "aeioubdpqmnstck"[Math.floor(Math.random()*15)];
-    return syl.slice(0,idx)+alt+syl.slice(idx+1);
+    // repli doux : inversion de deux lettres adjacentes ou lettre oubliée (jamais de lettre au hasard)
+    const j=1+Math.floor(Math.random()*(low.length-2));
+    if(low[j]!==low[j+1]) return low.slice(0,j)+low[j+1]+low[j]+low.slice(j+2);
+    return low.slice(0,j)+low.slice(j+1);
   }
   const [a,b] = candidates[Math.floor(Math.random()*candidates.length)];
   return low.replace(a,b);
@@ -442,30 +477,6 @@ function confusableSwap(syl){
    - confusions visuelles b/d, p/q, m/n, f/v, t/d
    - é/è/e confondus
    Jamais de pluriel ou forme valide, jamais de double consonne initiale artificielle. */
-function orthoVariants(w){
-  const low=w.toLowerCase(); const out=new Set();
-  // inversion de lettres adjacentes (pas aux extrémités)
-  for(let i=1;i<low.length-1;i++){
-    if(low[i]!==low[i+1]) out.add(low.slice(0,i)+low[i+1]+low[i]+low.slice(i+2));
-  }
-  // lettre oubliée (mot d'au moins 4 lettres, pas la première)
-  if(low.length>=4){
-    for(let i=1;i<low.length;i++){
-      if(i===0 || low[i]===low[i-1]) continue;
-      out.add(low.slice(0,i)+low.slice(i+1));
-    }
-  }
-  // confusions visuelles classiques
-  const vis=[['b','d'],['d','b'],['p','q'],['q','p'],['m','n'],['n','m'],['f','v'],['t','d']];
-  vis.forEach(([a,b])=>{ if(low.includes(a)) out.add(low.replace(a,b)); });
-  // accents confondus
-  ['é','è','ê'].forEach(a=>{ if(low.includes(a)){ out.add(low.replace(new RegExp(a,'g'),'e')); out.add(low.replace(new RegExp(a,'g'),'è')); } });
-  // doublement d'une consonne INTERNE (erreur réaliste : chappeau)
-  for(let i=1;i<low.length-1;i++){
-    if(/[bcdfglmnprst]/.test(low[i]) && !/[bcdfglmnprst]/.test(low[i-1])){ out.add(low.slice(0,i)+low[i]+low.slice(i)); break; }
-  }
-  return [...out].filter(v=>v && v!==low && v.length>1);
-}
 
 /* ---------- Stockage local (avec détection de blocage) ---------- */
 const STORE_KEY = 'dicteeMaligneV2';
@@ -721,6 +732,26 @@ function genPhraseExo(item){
   const blanked = item.text.replace(new RegExp(escapeRegExp(target),'i'), '_____');
   return {type:'phrase', item, target, blanked, options};
 }
+function genTerminaisonExo(item){
+  if(item.kind!=='conj') return null;
+  const forms=[];
+  for(let p=0;p<6;p++){ const f=conjAt(item.inf, item.tense, p); if(f) forms.push(f); }
+  if(forms.length<4) return null;
+  const correct=item.target;
+  let stem=forms[0];
+  forms.forEach(f=>{ while(!f.startsWith(stem)) stem=stem.slice(0,-1); });
+  let useStem = stem.length>=3 && forms.some(f=>f.slice(stem.length)!==correct.slice(stem.length));
+  const pool=[...new Set(useStem? forms.map(f=>f.slice(stem.length)) : forms)].filter(o=>o!==correct && o!==correct.slice(stem.length));
+  if(pool.length<2) useStem=false;
+  const opts=useStem? forms.map(f=>f.slice(stem.length)) : forms;
+  const uniq=[...new Set(opts)];
+  const answer=useStem? correct.slice(stem.length) : correct;
+  if(!uniq.includes(answer)) uniq.push(answer);
+  const options=shuffle(uniq).slice(0, Math.max(3, Math.min(4, uniq.length)));
+  if(!options.includes(answer)) { options[0]=answer; }
+  const blanked=item.text.replace(correct, useStem? stem+'_____' : '_____');
+  return {type:'terminaison', item, target:correct, blanked, options:shuffle(options), answer, useStem, stem};
+}
 function genChasseExo(item){
   let target = item.kind==='word' ? item.text : item.target;
   if(!target) return null;
@@ -728,11 +759,7 @@ function genChasseExo(item){
   let pool = new Set(orthoVariants(target));
   let tries=0;
   while(pool.size<3 && tries<12){ const d=confusableSwap(target); if(d.toLowerCase()!==target.toLowerCase() && !pool.has(d)) pool.add(d); tries++; }
-  while(pool.size<3){
-    const idx=Math.floor(Math.random()*target.length); const alt="aeioubdpqmnstck"[Math.floor(Math.random()*15)];
-    const d = target.slice(0,idx)+alt+target.slice(idx+1);
-    if(d.toLowerCase()!==target.toLowerCase() && !pool.has(d)) pool.add(d);
-  }
+  // si le mot est trop court pour offrir 3 pièges crédibles, on se contente de 1 ou 2 — jamais de fausses lettres inventées
   const options = shuffle([target, ...Array.from(pool).slice(0,3)]);
   return {type:'chasse', item, target, options};
 }
@@ -776,6 +803,9 @@ function buildQueue(items, families, opts){
       if(opts.encodage){ item.syllables.forEach(syl=>{ if(syl.length>1) all.push(genLettresSyllabeExo(item, syl)); }); }
       if(opts.graphie){ genGraphieExos(item).forEach(e=>all.push(e)); }
       if(opts.lettres && !(opts.encodage && item.syllables.length===1 && item.text.length<=3)){ all.push(genLettresExo(item, opts.niveau)); }  // pas de doublon avec l'encodage sur les toutes petites syllabes
+      if(opts.flash){ all.push(genFlashExo(item)); }
+    } else if(item.kind==='conj'){
+      const e=genTerminaisonExo(item); if(e) all.push(e);
       if(opts.flash){ all.push(genFlashExo(item)); }
     } else {
       if(opts.phrase){ const e=genPhraseExo(item); if(e) all.push(e); }
@@ -844,7 +874,11 @@ const MASC_EN_E=new Set(['livre','arbre','père','frère','chêne','lièvre','ma
 function presForms(key, inf){
   const ir=IRREG[key];
   if(ir) return ir.p;
-  if(key.endsWith('er')){ const st=inf.slice(0,-2); const f=E1.map(e=>st+e); if(key.endsWith('ger')) f[3]=st+'eons'; else if(key.endsWith('cer')) f[3]=st.slice(0,-1)+'çons'; return f; }
+  if(key.endsWith('er')){
+    let st=inf.slice(0,-2);
+    if(key.endsWith('yer')) st=inf.slice(0,-3)+'i';  // nettoyer → je nettoie (y devient i)
+    const f=E1.map(e=>st+e); if(key.endsWith('ger')) f[3]=st+'eons'; else if(key.endsWith('cer')) f[3]=st.slice(0,-1)+'çons'; return f;
+  }
   if(key.endsWith('ir')) return E2.map(e=>inf.slice(0,-2)+e);
   if(key.endsWith('re')) return ['s','s','','ons','ez','ent'].map(e=>inf.slice(0,-2)+e);
   return null;
@@ -852,13 +886,15 @@ function presForms(key, inf){
 function conjAt(inf, tense, i){
   const key=conjKey(inf); const ir=IRREG[key];
   if(tense==='present'){ const p=presForms(key, inf); return p? p[i] : null; }
-  if(tense==='futur'){ let st=null; if(ir) st=ir.f; else if(key.endsWith('er')||key.endsWith('ir')) st=inf; else if(key.endsWith('re')) st=inf.slice(0,-1)+'r'; return st? st+EF[i] : null; }
+  if(tense==='futur'){ let st=null; if(ir) st=ir.f; else if(key.endsWith('yer')) st=inf.slice(0,-3)+'ier'; else if(key.endsWith('er')||key.endsWith('ir')) st=inf; else if(key.endsWith('re')) st=inf.slice(0,-1)+'r'; return st? st+EF[i] : null; }
   if(tense==='imparfait'){ if(key==='etre') return 'ét'+EI[i]; const p=presForms(key, inf); return p? p[3].replace(/ons$/,'')+EI[i] : null; }
   if(tense==='passe'){
     let pp = ir? ir.pp : key.endsWith('er')? inf.slice(0,-2)+'é' : key.endsWith('ir')? inf.slice(0,-2)+'i' : key.endsWith('re')? inf.slice(0,-2)+'u' : null;
     if(!pp) return null;
     const auxEtre = (ir&&ir.aux) || ETRE_AUX.has(key);
-    return auxEtre? ETRE_PRES[i]+' '+pp : AUX_PRES[i]+' '+pp;
+    if(!auxEtre) return AUX_PRES[i]+' '+pp;
+    // accord du participe avec être : pluriel pour nous/vous/ils (le féminin est géré dans conjSentence)
+    return ETRE_PRES[i]+' '+pp+((i===3||i===4||i===5)?'s':'');
   }
   return null;
 }
@@ -942,9 +978,7 @@ const VERB_COMPL={
 'effacer':['le tableau','ses erreurs'],
 'placer':['les lettres','sa chaise'],
 'avancer':['doucement','jusqu\'au tableau'],
-'danser':['dans la classe','sur la musique'],
-'chanter':['une chanson'],
-'aimer':['les histoires']
+'danser':['dans la classe','sur la musique']
 };
 const GENERIC_COMPL=['avec plaisir','tout doucement','en classe','comme un champion','sans se tromper'];
 function conjCompl(inf){
@@ -967,7 +1001,7 @@ function conjSentence(inf, tense, pers, word){
   if(comp && word && Math.random()<0.4){ // intégrer le mot de la liste dans un complément cohérent
     if(key==='lire'||key==='ecrire'||key==='dessiner'||key==='choisir'||key==='regarder'||key==='chercher'||key==='apprendre') comp = detWord(word);
   }
-  return {text: pref+pron+(pron==="j'"?'':' ')+verb+(comp? ' '+comp : '')+'.', target: verb};
+  return {text: pref+pron+(pron==="j'"?'':' ')+verb+(comp? ' '+comp : '')+'.', target: verb, inf, tense, pers};
 }
 function getVerbes(){
   return document.getElementById('verbes').value.split(/\n|,/).map(s=>s.trim()).filter(Boolean);
@@ -982,7 +1016,7 @@ function conjItemsFor(items){
     const pers=Math.floor(Math.random()*6);
     const w = words.length? words[Math.floor(Math.random()*words.length)] : null;
     const s=conjSentence(inf, tense, pers, w);
-    if(s) out.push({kind:'phrase', text:s.text, target:s.target}); else errs.push(inf);
+    if(s) out.push({kind:'conj', text:s.text, target:s.target, inf:s.inf, tense:s.tense, pers:s.pers}); else errs.push(inf);
   });
   return {items:out, errs};
 }
@@ -997,7 +1031,14 @@ function updateConjPreview(){
 }
 
 /* ---------- Révision intelligente : maîtrise par élève ---------- */
-function exoKey(ex){ return String(ex.target || ex.item.text).toLowerCase(); }
+function exoKey(ex){
+  if(ex.item && (ex.item.kind==='conj'||ex.item.kind==='phrase') && ex.item.target) return String(ex.item.target).toLowerCase();
+  return String(ex.target || ex.item.text).toLowerCase();
+}
+function missLabel(ex){
+  if(ex.item && (ex.item.kind==='conj'||ex.item.kind==='phrase') && ex.item.target) return ex.item.target;
+  return ex.item.text;
+}
 function masteryOf(){
   if(!storageOK || !store.currentEleve) return null;
   const e = store.eleves[store.currentEleve];
@@ -1116,7 +1157,7 @@ function showSuivi(){
 function recordSession(){
   if(!store.currentEleve || !storageOK) return;
   const e = store.eleves[store.currentEleve] = store.eleves[store.currentEleve] || {history:[]};
-  e.history.push({date:new Date().toLocaleDateString('fr-FR'), score, total:queue.length, missed:[...new Set(missedItems.map(m=>m.item.text))]});
+  e.history.push({date:new Date().toLocaleDateString('fr-FR'), score, total:queue.length, missed:[...new Set(missedItems.map(m=>missLabel(m)))]});
   if(e.history.length>50) e.history.shift();
   saveStore();
 }
@@ -1138,6 +1179,7 @@ function showExercise(){
   else if(ex.type==='lettresSyl') renderLettresSyl(ex);
   else if(ex.type==='flash') renderFlash(ex);
   else if(ex.type==='phrase') renderPhrase(ex);
+  else if(ex.type==='terminaison') renderTerminaison(ex);
   else if(ex.type==='chasse') renderChasse(ex);
   else if(ex.type==='mystere') renderMystere(ex);
   else if(ex.type==='famille') renderFamille(ex);
@@ -1164,7 +1206,7 @@ function showResults(){
   recordSession();
   const mz = document.getElementById('missZone');
   if(missedItems.length){
-    const uniqueTexts = [...new Set(missedItems.map(m=>m.item.text))];
+    const uniqueTexts = [...new Set(missedItems.map(m=>missLabel(m)))];
     mz.innerHTML = `<p>À revoir :</p><ul class="miss-list">${uniqueTexts.map(t=>`<li>${esc(t)}</li>`).join('')}</ul>`;
     document.getElementById('retryMissBtn').classList.remove('hidden');
   } else {
@@ -1173,7 +1215,7 @@ function showResults(){
   }
 }
 document.getElementById('printBtn').addEventListener('click', ()=>{
-  const words = missedItems.length? [...new Set(missedItems.map(m=>m.item.text))] : sessionWords;
+  const words = missedItems.length? [...new Set(missedItems.map(m=>missLabel(m)))] : sessionWords;
   if(!words.length) return;
   const zone=document.createElement('div'); zone.id='printZone';
   const title = missedItems.length? 'Mots à revoir' : 'Liste à entraîner';
@@ -1330,7 +1372,7 @@ function renderFlash(ex){
     <div class="flash-word" id="flashWord">${esc(ex.text)}</div>
     <div class="flash-count" id="flashCount"></div>
     <div id="flashHiddenZone" class="hidden">
-      <label for="flashInput">Écris ce que tu as retenu :</label>
+      <label for="flashInput">Écris ce que tu as retenu (appuie sur Entrée pour vérifier) :</label>
       <input type="text" id="flashInput" autocomplete="off">
       <button class="btn-main btn-sm" id="checkFlash" style="margin-top:10px;">Vérifier</button>
     </div>
@@ -1351,8 +1393,9 @@ function renderFlash(ex){
     document.getElementById('flashHiddenZone').classList.remove('hidden');
     try{ document.getElementById('flashInput').focus(); }catch(e){}
   }, ex.seconds*1000);
-  document.getElementById('checkFlash').addEventListener('click', ()=>{
+  document.getElementById('checkFlash').addEventListener('click', function(){
     const input=document.getElementById('flashInput');
+    if(input.disabled) return;
     const val = input.value.trim();
     const ok = normAns(val, ex.isPhrase)===normAns(ex.text, ex.isPhrase);
     const fb=document.getElementById('fbFlash');
@@ -1367,6 +1410,7 @@ function renderFlash(ex){
     input.disabled=true;
     finishExercise(ok, ex);
   });
+  document.getElementById('flashInput').addEventListener('keydown', e=>{ if(e.key==='Enter') document.getElementById('checkFlash').click(); });
 }
 function renderChasse(ex){
   exoZone.innerHTML = `
@@ -1420,6 +1464,7 @@ function renderMystere(ex){
     hintBtn.disabled=true;
     finishExercise(ok, ex);
   });
+  document.getElementById('mystereInput').addEventListener('keydown', e=>{ if(e.key==='Enter') document.getElementById('checkMystere').click(); });
 }
 function renderFamille(ex){
   exoZone.innerHTML = `
@@ -1456,6 +1501,34 @@ function renderPhrase(ex){
     });
     grid.appendChild(b);
   });
+}
+
+function renderTerminaison(ex){
+  const whole = !ex.useStem;
+  exoZone.innerHTML = `
+    <div class="exo-kind">Terminaison du verbe</div>
+    <div class="exo-prompt">Écoute la phrase et choisis ${whole? 'le verbe conjugué qui convient':'la terminaison qui convient'}.
+      <button class="speak-btn" id="playBtn" type="button" aria-label="Écouter">🔊</button>
+      <button class="speak-btn slow" id="slowBtn" type="button" aria-label="Écouter lentement">🐢</button>
+    </div>
+    <div style="font-size:1.35rem; font-weight:700; margin:14px 0; line-height:1.9;">${esc(ex.blanked)}</div>
+    <div class="opt-grid" id="opts"></div>`;
+  const grid = document.getElementById('opts');
+  ex.options.forEach(opt=>{
+    const lbl = whole? opt : (opt===''? '(rien)' : '-'+opt);
+    const b=document.createElement('button'); b.className='opt-btn'; b.textContent=lbl;
+    b.addEventListener('click', ()=>{
+      const ok = opt===ex.answer;
+      b.classList.add(ok?'correct':'wrong');
+      if(!ok){ const want = whole? ex.answer : (ex.answer===''? '(rien)' : '-'+ex.answer); const c=[...grid.children].find(c=>c.textContent===want); if(c) c.classList.add('correct'); }
+      [...grid.children].forEach(c=>c.disabled=true);
+      finishExercise(ok, ex);
+    });
+    grid.appendChild(b);
+  });
+  document.getElementById('playBtn').addEventListener('click', ()=>speak(ex.item.text));
+  document.getElementById('slowBtn').addEventListener('click', ()=>speak(ex.item.text, true));
+  speak(ex.item.text);
 }
 
 /* ---------- Restauration des réglages ---------- */
