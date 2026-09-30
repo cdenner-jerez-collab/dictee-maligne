@@ -874,6 +874,85 @@ function detWord(w){
   const fem = /e$/.test(w) && !MASC_EN_E.has(w.toLowerCase());
   return /^[aeiouéèêàîôh]/i.test(w)? "l'"+w : (fem?'la ':'le ')+w;
 }
+const VERB_COMPL={
+'chanter':['une chanson','une comptine','dans la chorale'],
+'finir':['son travail','son exercice','son dessin'],
+'imaginer':['une histoire','un voyage','une solution'],
+'dessiner':['un château','un animal','une maison'],
+'jouer':['dans la cour','au ballon','avec ses amis'],
+'lire':['un livre','une bande dessinée','une histoire'],
+'ecrire':['une lettre','un poème','un mot'],
+'manger':['une pomme','à la cantine','un gâteau'],
+'boire':['de l\'eau','un jus de fruit'],
+'dormir':['dans son lit','chez sa mamie'],
+'partir':['en vacances','à l\'école'],
+'aller':['à l\'école','à la piscine','au marché'],
+'faire':['ses devoirs','du vélo','un gâteau'],
+'prendre':['le bus','son cartable','le goûter'],
+'mettre':['son manteau','ses chaussures','la table'],
+'ouvrir':['son livre','la porte','la fenêtre'],
+'fermer':['la porte','son cahier','la fenêtre'],
+'regarder':['un film','les oiseaux','le tableau'],
+'ecouter':['la maîtresse','une histoire','la radio'],
+'parler':['à sa copine','avec ses amis','français'],
+'travailler':['à l\'école','en silence'],
+'apprendre':['une poésie','sa leçon','un chant'],
+'choisir':['un livre','un jeu','un dessert'],
+'attendre':['son tour','le bus','la récré'],
+'aimer':['les histoires','le sport','les animaux'],
+'avoir':['un cadeau','un cartable','faim'],
+'etre':['content','à l\'école'],
+'savoir':['sa leçon','une comptine','nager'],
+'pouvoir':['nager','lire','jouer'],
+'vouloir':['un livre','un gâteau','jouer'],
+'voir':['ses amis','un film','un arc-en-ciel'],
+'lever':['la main','la tête'],
+'chercher':['un livre','ses crayons','sa gomme'],
+'observer':['les insectes','le ciel','une image'],
+'partager':['son goûter','un jeu','ses crayons'],
+'construire':['une cabane','une tour','un château de sable'],
+'laver':['ses mains','la vaisselle'],
+'ranger':['sa chambre','ses affaires','les livres'],
+'préparer':['un gâteau','sa leçon','un exposé'],
+'compter':['jusqu\'à dix','les étoiles','ses crayons'],
+'nommer':['les couleurs','les animaux'],
+'reciter':['une poésie','sa leçon'],
+'sauter':['dans la cour','comme un kangourou'],
+'courir':['dans la cour','après le ballon'],
+'marcher':['doucement','dans la classe'],
+'grandir':['vite','comme un arbre'],
+'fleurir':['au printemps'],
+'sourire':['à ses amis'],
+'aider':['sa maman','un copain','la maîtresse'],
+'agir':['comme un grand','sagement'],
+'arriver':['à l\'heure','les premiers'],
+'rester':['calme','en classe'],
+'tomber':['par terre','de son vélo'],
+'devenir':['grand','fort'],
+'entrer':['en classe','dans la classe'],
+'sortir':['en récré','de la classe'],
+'monter':['dans le bus','à l\'étage'],
+'descendre':['de sa chambre','de l\'autobus'],
+'revenir':['tôt','de l\'école'],
+'retourner':['chez lui','à l\'école'],
+'passer':['à table','un bon moment'],
+'envoyer':['une lettre','un message'],
+'appeler':['sa mamie','un copain'],
+'jeter':['un papier','la balle'],
+'effacer':['le tableau','ses erreurs'],
+'placer':['les lettres','sa chaise'],
+'avancer':['doucement','jusqu\'au tableau'],
+'danser':['dans la classe','sur la musique'],
+'chanter':['une chanson'],
+'aimer':['les histoires']
+};
+const GENERIC_COMPL=['avec plaisir','tout doucement','en classe','comme un champion','sans se tromper'];
+function conjCompl(inf){
+  const key=conjKey(inf);
+  const pool = VERB_COMPL[key] || null;
+  if(pool) return pool[Math.floor(Math.random()*pool.length)];
+  return Math.random()<0.5? GENERIC_COMPL[Math.floor(Math.random()*GENERIC_COMPL.length)] : '';
+}
 function conjSentence(inf, tense, pers, word){
   const base=conjAt(inf, tense, pers);
   if(!base) return null;
@@ -884,8 +963,11 @@ function conjSentence(inf, tense, pers, word){
   }
   if(pron==='je' && /^[aeiouéèêàîôh]/i.test(verb)) pron="j'";
   const prefs=CONJ_PREFS[tense]; const pref=prefs[Math.floor(Math.random()*prefs.length)];
-  const comp = word? ' avec '+detWord(word) : '';
-  return {text: pref+pron+(pron==="j'"?'':' ')+verb+comp+'.', target: verb};
+  let comp = conjCompl(inf);
+  if(comp && word && Math.random()<0.4){ // intégrer le mot de la liste dans un complément cohérent
+    if(key==='lire'||key==='ecrire'||key==='dessiner'||key==='choisir'||key==='regarder'||key==='chercher'||key==='apprendre') comp = detWord(word);
+  }
+  return {text: pref+pron+(pron==="j'"?'':' ')+verb+(comp? ' '+comp : '')+'.', target: verb};
 }
 function getVerbes(){
   return document.getElementById('verbes').value.split(/\n|,/).map(s=>s.trim()).filter(Boolean);
