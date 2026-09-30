@@ -429,7 +429,7 @@ function orthoVariants(w){
   const phon=[['an','en'],['en','an'],['ain','in'],['in','ain'],['ein','ain'],['aim','in'],
               ['ai','è'],['è','ai'],['ai','a'],['ei','ai'],['eau','o'],['eau','au'],['au','o'],
               ['ph','f'],['ch','c'],['gu','g'],['g','j'],['j','g'],['y','i'],
-              ['ss','s'],['s','ss'],['tt','t'],['ll','l'],['l','ll'],['er','é'],['é','er'],['ez','é'],['on','om']];
+              ['ss','s'],['tt','t'],['ll','l'],['er','é'],['é','er'],['ez','é'],['on','om']];
   const phonOut=[];
   phon.forEach(([a,b])=>{ if(low.includes(a)){ const v=low.replace(a,b); if(v!==low) phonOut.push(v); } });
   // confusions visuelles classiques
@@ -437,35 +437,15 @@ function orthoVariants(w){
   const visOut=[];
   vis.forEach(([a,b])=>{ if(low.includes(a)) visOut.push(low.replace(a,b)); });
   ['é','è','ê'].forEach(a=>{ if(low.includes(a)){ visOut.push(low.replace(new RegExp(a,'g'),'e')); visOut.push(low.replace(new RegExp(a,'g'),'è')); } });
-  // doublement d'une consonne INTERNE (erreur réaliste : chappeau)
-  const doubles=[];
-  for(let i=1;i<low.length-1;i++){
-    if(/[bcdfglmnprst]/.test(low[i]) && !/[bcdfglmnprst]/.test(low[i-1])){ doubles.push(low.slice(0,i)+low[i]+low.slice(i)); break; }
-  }
-  // lettre oubliée (mot d'au moins 4 lettres, pas la première)
-  const omissions=[];
-  if(low.length>=4){
-    for(let i=1;i<low.length;i++){
-      if(low[i]===low[i-1]) continue;
-      const v=low.slice(0,i)+low.slice(i+1);
-      if(v!==low && v.length>1) omissions.push(v);
-    }
-  }
-  // inversions : dépannage uniquement, 2 maximum
-  const inversions=[];
-  for(let i=1;i<low.length-1 && inversions.length<2;i++){
-    if(low[i]!==low[i+1]) inversions.push(low.slice(0,i)+low[i+1]+low[i]+low.slice(i+2));
-  }
-  return [...new Set([...phonOut, ...visOut, ...doubles, ...omissions, ...inversions])].filter(v=>v && v!==low && v.length>1);
+  // uniquement des erreurs orthographiques plausibles : sons proches et confusions visuelles.
+  // pas de fautes de frappe (doublement, omission, inversion) : elles n'apprennent rien en dictée.
+  return [...new Set([...phonOut, ...visOut])].filter(v=>v && v!==low && v.length>1);
 }
 function confusableSwap(syl){
   const low = syl.toLowerCase();
   const candidates = CONFUSABLE.filter(([a])=>low.includes(a));
   if(candidates.length===0){
-    // repli doux : inversion de deux lettres adjacentes ou lettre oubliée (jamais de lettre au hasard)
-    const j=1+Math.floor(Math.random()*(low.length-2));
-    if(low[j]!==low[j+1]) return low.slice(0,j)+low[j+1]+low[j]+low.slice(j+2);
-    return low.slice(0,j)+low.slice(j+1);
+    return null;  // aucune confusion de son disponible : pas de piège inventé
   }
   const [a,b] = candidates[Math.floor(Math.random()*candidates.length)];
   return low.replace(a,b);
@@ -684,10 +664,12 @@ function genSyllabeExo(item, target){
   const reversed = target.split('').reverse().join('');
   if(reversed!==target) distractors.add(reversed);   // pas de doublon si palindrome (non, ana…)
   let guard=0;
-  while(distractors.size<3 && guard<30){
+  let noSwap=false;
+  while(distractors.size<3 && guard<30 && !noSwap){
     guard++;
     const d = confusableSwap(target);
-    if(d!==target && !distractors.has(d)) distractors.add(d);
+    if(!d){ noSwap=true; }
+    else if(d!==target && !distractors.has(d)) distractors.add(d);
     if(distractors.size<3 && Math.random()<0.3){
       for(const key in GRAPHIES){ if(target.includes(key)){ const alts=GRAPHIES[key].filter(g=>g!==key); if(alts.length){ const d2=target.replace(key, alts[Math.floor(Math.random()*alts.length)]); if(d2!==target) distractors.add(d2); } } }
     }
@@ -727,7 +709,7 @@ function genPhraseExo(item){
   const target = item.target;
   let pool = new Set(orthoVariants(target));
   let guard=0;
-  while(pool.size<2 && guard<20){ guard++; const d=confusableSwap(target); if(d.toLowerCase()!==target.toLowerCase() && !pool.has(d)) pool.add(d); }
+  while(pool.size<2 && guard<20){ guard++; const d=confusableSwap(target); if(d && d.toLowerCase()!==target.toLowerCase() && !pool.has(d)) pool.add(d); if(!d) break; }
   const options = shuffle([target, ...Array.from(pool).slice(0,2)]);
   const blanked = item.text.replace(new RegExp(escapeRegExp(target),'i'), '_____');
   return {type:'phrase', item, target, blanked, options};
@@ -758,7 +740,7 @@ function genChasseExo(item){
   if(target.includes(' ')) target = target.split(' ').pop();
   let pool = new Set(orthoVariants(target));
   let tries=0;
-  while(pool.size<3 && tries<12){ const d=confusableSwap(target); if(d.toLowerCase()!==target.toLowerCase() && !pool.has(d)) pool.add(d); tries++; }
+  while(pool.size<3 && tries<12){ const d=confusableSwap(target); if(d && d.toLowerCase()!==target.toLowerCase() && !pool.has(d)) pool.add(d); tries++; if(!d) break; }
   // si le mot est trop court pour offrir 3 pièges crédibles, on se contente de 1 ou 2 — jamais de fausses lettres inventées
   const options = shuffle([target, ...Array.from(pool).slice(0,3)]);
   return {type:'chasse', item, target, options};
